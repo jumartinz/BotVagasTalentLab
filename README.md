@@ -1,6 +1,6 @@
 # 🤖 BotVagasTalentLab
 
-> Automação para monitoramento, coleta e notificação de vagas de emprego da plataforma TalentLab.
+> Automação para monitoramento, coleta e notificação de vagas de emprego da plataforma TalentLab feito por Anna Júlia Martins e Vitoria Cristina Carvalho
 
 [![Status](https://img.shields.io/badge/status-ativo-brightgreen)](#)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
