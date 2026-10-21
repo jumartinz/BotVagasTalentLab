@@ -49,3 +49,7 @@ Ele realiza a varredura periódica de vagas conforme filtros configurados (área
    ```bash
    git clone [https://github.com/seu-usuario/BotVagasTalentLab.git](https://github.com/seu-usuario/BotVagasTalentLab.git)
    cd BotVagasTalentLab
+
+2. **Para rodar BuscadorDeVagas.py**
+   ```bash
+   python C:/Users/anna.martins/Desktop/Aula3/AnalisadorDeVagas.py --saida C:/Users/anna.martins/Desktop/Aula3/vagas.xlsx
