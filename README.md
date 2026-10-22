@@ -60,3 +60,6 @@ O script analisa o título e a descrição de cada vaga para caracterizá-la em 
    ```bash
    git clone [https://github.com/seu-usuario/BotVagasTalentLab.git](https://github.com/seu-usuario/BotVagasTalentLab.git)
    cd BotVagasTalentLab
+2. **Para rodar o projeto:**
+   ```bash
+   python C:/Users/anna.martins/Desktop/Aula3/AnalisadorDeVagas.py --saida C:/Users/anna.martins/Desktop/Aula3/vagas.xlsx
