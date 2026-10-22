@@ -62,4 +62,4 @@ O script analisa o título e a descrição de cada vaga para caracterizá-la em 
    cd BotVagasTalentLab
 2. **Para rodar o projeto:**
    ```bash
-   python C:/Users/anna.martins/Desktop/Aula3/AnalisadorDeVagas.py --saida C:/Users/anna.martins/Desktop/Aula3/vagas.xlsx
+   python C:/Users/anna.martins/Desktop/BotVagasTalentLab/AnalisadorDeVagas.py --saida C:/Users/anna.martins/Desktop/BotVagasTalentLab/vagas.xlsx
