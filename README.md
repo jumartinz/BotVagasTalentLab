@@ -22,5 +22,5 @@ Programa em Python desenvolvido para automação, busca de vagas de tecnologia e
 2. Execute a interface principal:
    ```bash
    pip install -r requirements.txt
-python fiap_vagas_tech.py              # abre a interface
-python fiap_vagas_tech.py --selftest   # teste offline: gera um Excel com vagas de exemplo
+   python fiap_vagas_tech.py              # abre a interface
+   python fiap_vagas_tech.py --selftest   # teste offline: gera um Excel com vagas de exemplo
