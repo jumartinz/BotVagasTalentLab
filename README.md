@@ -1,4 +1,4 @@
-cat << 'EOF' > README.md
+
 # Bot Vagas Talent Lab - FIAP
 
 Programa em Python desenvolvido para automação, busca de vagas de tecnologia em fontes públicas, padronização de acordo com as regras de negócio da FIAP e exportação em lote para planilha Excel (`.xlsx`).
@@ -18,3 +18,9 @@ Programa em Python desenvolvido para automação, busca de vagas de tecnologia e
 1. Instale as dependências:
    ```bash
    pip install pandas beautifulsoup4 customtkinter openpyxl
+
+2. Execute a interface principal:
+   ```bash
+   pip install -r requirements.txt
+python fiap_vagas_tech.py              # abre a interface
+python fiap_vagas_tech.py --selftest   # teste offline: gera um Excel com vagas de exemplo
