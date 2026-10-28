@@ -7,6 +7,13 @@ FIAP · Coletor de Vagas de Tecnologia
 Busca vagas de tecnologia em fontes públicas brasileiras, aplica as regras de
 negócio da FIAP e exporta tudo em lote para Excel.
 
+Regras de frescor
+-----------------
+- Só entram vagas publicadas há, no máximo, MAX_AGE_DAYS dias (padrão: 2).
+- Vagas sem data de publicação são descartadas (não dá para garantir o prazo).
+- Vagas com prazo de inscrição já vencido são descartadas.
+- Emojis são removidos de título, descrição, local e empresa.
+
 Fontes
 ------
 - Gupy Portal      : API pública de busca de vagas (JSON), sem chave.
@@ -70,6 +77,7 @@ NIVEIS = ["Early Career", "Professional / Experienced",
 MAX_TITLE = 58
 MAX_DESC = 2000
 DEFAULT_VALIDITY_DAYS = 30
+MAX_AGE_DAYS = 2          # só vagas publicadas há, no máximo, 2 dias
 AFFIRMATIVE_SUFFIX = " - Afirmativa (minoritária)"
 
 COLUMNS = [
@@ -121,9 +129,28 @@ def kw_regex(kw: str) -> re.Pattern:
 
 _ILLEGAL_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+# Emojis e pictogramas (preserva acentos, •, –, R$, ©, ® etc.)
+_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002300-\U000023FF"
+    "\U00002B00-\U00002BFF\U000025AA-\U000025FE\U00002934\U00002935"
+    "\U0000203C\U00002049\U00002122\U00002139\U000024C2\U00003030\U0000303D"
+    "\U00003297\U00003299\U0000FE0F\U0000200D\U000020E3\U000E0020-\U000E007F]+")
+
+
+def strip_emojis(text: str) -> str:
+    """Remove emojis/pictogramas e limpa os espaços que sobram."""
+    if not text:
+        return text or ""
+    text = _EMOJI.sub("", text)
+    text = re.sub(r"[ \t\u00a0]{2,}", " ", text)
+    return re.sub(r"[ \t]+\n", "\n", text)
+
 
 def sanitize(value):
-    return _ILLEGAL_XML.sub("", value) if isinstance(value, str) else value
+    """Rede de segurança final antes do Excel: sem emojis nem caracteres ilegais."""
+    if isinstance(value, str):
+        return _ILLEGAL_XML.sub("", strip_emojis(value))
+    return value
 
 
 def truncate(text: str, limit: int) -> str:
@@ -139,7 +166,7 @@ def truncate(text: str, limit: int) -> str:
 
 
 def html_to_text(raw: str) -> str:
-    """HTML/Markdown -> texto limpo, preservando quebras de linha e bullets."""
+    """HTML/Markdown -> texto limpo (sem emojis), preservando quebras e bullets."""
     if not raw:
         return ""
     text = raw
@@ -156,6 +183,7 @@ def html_to_text(raw: str) -> str:
             tag.append("\n")
         text = soup.get_text("")
     text = html.unescape(text)
+    text = strip_emojis(text)
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)          # imagens md
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)      # links md
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)         # headers md
@@ -462,8 +490,8 @@ def detect_affirmative(text: str, flag: bool = False) -> list[str]:
 
 
 def format_title(base_title: str, affirmative: bool) -> str:
-    """Título ≤ 58 caracteres; afirmativas recebem o sufixo obrigatório."""
-    base = re.sub(r"\s+", " ", base_title or "").strip(" -–|:")
+    """Título ≤ 58 caracteres (sem emojis); afirmativas recebem o sufixo obrigatório."""
+    base = re.sub(r"\s+", " ", strip_emojis(base_title or "")).strip(" -–|:")
     base = re.sub(r"\s*[-–|]\s*vagas?\s+afirmativa.*$", "", base, flags=re.I)
     if affirmative:
         room = MAX_TITLE - len(AFFIRMATIVE_SUFFIX)
@@ -518,8 +546,38 @@ def build_description(contract: str, mode: str, location: str, workload: str,
     return full[:MAX_DESC]
 
 
+# ---- frescor da vaga ------------------------------------------------------
+def is_too_old(raw: RawJob) -> bool:
+    """True se não há data de publicação ou ela é anterior a MAX_AGE_DAYS dias atrás."""
+    pub = parse_date(raw.published)
+    return pub is None or pub < date.today() - timedelta(days=MAX_AGE_DAYS)
+
+
+def freshness_issue(raw: RawJob) -> Optional[str]:
+    """'antiga' ou 'vencida' se a vaga deve ser descartada; None se estiver ok."""
+    if is_too_old(raw):
+        return "antiga"
+    deadline = parse_date(raw.deadline)
+    if deadline is not None and deadline < date.today():
+        return "vencida"
+    return None
+
+
 def process_job(raw: RawJob) -> Optional[dict]:
-    """Aplica TODAS as regras da FIAP. Retorna None se não for vaga de tecnologia."""
+    """Aplica TODAS as regras da FIAP.
+
+    Retorna None se a vaga não for de tecnologia, for antiga (publicada há mais
+    de MAX_AGE_DAYS dias / sem data) ou estiver com o prazo vencido.
+    """
+    if freshness_issue(raw):
+        return None
+
+    raw.title = strip_emojis(raw.title)
+    raw.company = strip_emojis(raw.company)
+    raw.location = strip_emojis(raw.location)
+    raw.labels = strip_emojis(raw.labels)
+    raw.salary_hint = strip_emojis(raw.salary_hint)
+
     body = html_to_text(raw.description)
     title_ctx = f"{raw.title} {raw.labels}"
 
@@ -543,11 +601,10 @@ def process_job(raw: RawJob) -> Optional[dict]:
                                     raw.company, body)
 
     today = date.today()
-    published = parse_date(raw.published) or today
-    expiry = parse_date(raw.deadline)
+    published = min(parse_date(raw.published), today)   # já validada acima
+    expiry = parse_date(raw.deadline)                   # já garantido: None ou >= hoje
     if expiry is None or expiry < published:
-        base = max(published, today)
-        expiry = base + timedelta(days=DEFAULT_VALIDITY_DAYS)
+        expiry = today + timedelta(days=DEFAULT_VALIDITY_DAYS)
 
     return {
         "Modalidade de Contratação": contract,
@@ -585,6 +642,14 @@ def validate_row(row: dict) -> list[str]:
         issues.append("link inválido")
     if row["Data de Expiração"] < row["Data de Publicação"]:
         issues.append("expiração < publicação")
+    if row["Data de Expiração"] < date.today():
+        issues.append("vaga vencida")
+    if row["Data de Publicação"] < date.today() - timedelta(days=MAX_AGE_DAYS):
+        issues.append(f"publicada há mais de {MAX_AGE_DAYS} dias")
+    for col in ("Título da Oportunidade", "Descrição da Oportunidade",
+                "Local da Oportunidade"):
+        if _EMOJI.search(str(row[col])):
+            issues.append(f"emoji em '{col}'")
     if (row["Geração de pacote de CVs ao expirar"], row["Aprovado (Uso Administrativo)"],
             row["Emprego em destaque para docente"]) != (FIXED_PACOTE_CV, FIXED_APROVADO,
                                                          FIXED_DESTAQUE_DOCENTE):
@@ -618,6 +683,7 @@ class JobSource:
     name = "base"
     max_pages = 10          # teto de páginas por consulta
     timeout = 20
+    sorted_desc = False     # True se a fonte devolve da mais nova p/ a mais antiga
 
     def __init__(self, session: requests.Session,
                  log: Callable[[str, str], None]):
@@ -693,6 +759,7 @@ class GitHubIssuesSource(JobSource):
     name = "GitHub Vagas"
     PAGE = 40
     max_pages = 5
+    sorted_desc = True      # API de issues: mais recentes primeiro
 
     def __init__(self, session, log, token: str = "", repos=None):
         super().__init__(session, log)
@@ -709,7 +776,8 @@ class GitHubIssuesSource(JobSource):
         data = self._json("GET", f"https://api.github.com/repos/{query}/issues",
                           headers=headers,
                           params={"state": "open", "per_page": self.PAGE,
-                                  "page": page + 1})
+                                  "page": page + 1, "sort": "created",
+                                  "direction": "desc"})
         jobs = []
         for it in data or []:
             try:
@@ -809,7 +877,9 @@ class JobHunter:
         self.on_progress, self.on_job, self.delay = on_progress, on_job, delay
         self.rows: list[dict] = []
         self.seen: set[str] = set()
-        self.discarded = 0
+        self.discarded = 0           # fora de tecnologia
+        self.discarded_old = 0       # publicadas há mais de MAX_AGE_DAYS (ou sem data)
+        self.discarded_expired = 0   # prazo de inscrição vencido
 
     def run(self) -> list[dict]:
         plan = []
@@ -847,6 +917,12 @@ class JobHunter:
                              f"{len(raws)} lidas, {added} novas", "info")
                     if not raws:
                         break
+                    # fonte ordenada da mais nova p/ a mais antiga: se a página
+                    # inteira já passou da janela, as próximas também passarão.
+                    if src.sorted_desc and all(is_too_old(r) for r in raws):
+                        self.log(f"{src.name} [{query}]: o restante é mais antigo que "
+                                 f"{MAX_AGE_DAYS} dias — pulando.", "info")
+                        break
                     self.stop.wait(self.delay)
             if consecutive_errors >= 3:
                 self.log(f"{src.name}: muitas falhas seguidas — fonte ignorada.", "error")
@@ -861,6 +937,13 @@ class JobHunter:
             if not key or key in self.seen:
                 continue
             self.seen.add(key)
+            issue = freshness_issue(raw)
+            if issue == "antiga":
+                self.discarded_old += 1
+                continue
+            if issue == "vencida":
+                self.discarded_expired += 1
+                continue
             try:
                 row = process_job(raw)
             except Exception as exc:
@@ -986,6 +1069,8 @@ class App(_Base):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll)
         self._log("Pronto. Configure as fontes e clique em “Iniciar Busca”.", "info")
+        self._log(f"Filtro ativo: apenas vagas publicadas há até {MAX_AGE_DAYS} dias "
+                  f"e com prazo não vencido.", "info")
 
     # ---- construção da UI -------------------------------------------------
     def _build_sidebar(self):
@@ -1204,12 +1289,15 @@ class App(_Base):
             # a UI acumula as linhas via evento "job"; aqui evitamos duplicar
             hunter.rows = []
             hunter.run()
-            put(("done", len(hunter.seen), hunter.discarded, self.stop_event.is_set()))
+            put(("done", len(hunter.seen), hunter.discarded,
+                 hunter.discarded_old, hunter.discarded_expired,
+                 self.stop_event.is_set()))
         except Exception as exc:  # última barreira: o app nunca cai
             log(f"Erro inesperado na coleta: {exc!r}", "error")
-            put(("done", 0, 0, True))
+            put(("done", 0, 0, 0, 0, True))
 
-    def _finish(self, seen: int, discarded: int, stopped: bool):
+    def _finish(self, seen: int, discarded: int, old: int, expired: int,
+                stopped: bool):
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled", fg_color="#6b7280", hover_color="#4b5563")
         if self.rows:
@@ -1219,8 +1307,9 @@ class App(_Base):
             self.pct_label.configure(text="100%")
         self.status_label.configure(text="Interrompido." if stopped else "Concluído.")
         self._log(f"{'Interrompido' if stopped else 'Concluído'}: {len(self.rows)} vagas "
-                  f"válidas · {seen} únicas analisadas · {discarded} descartadas "
-                  f"(fora de tecnologia).", "ok")
+                  f"válidas · {seen} únicas analisadas · {discarded} fora de tecnologia · "
+                  f"{old} com mais de {MAX_AGE_DAYS} dias (ou sem data) · "
+                  f"{expired} vencidas.", "ok")
 
     def export_excel(self):
         if not self.rows:
@@ -1254,29 +1343,45 @@ class App(_Base):
 # --------------------------------------------------------------------------- #
 def run_selftest(out_path: str = "vagas_fiap_selftest.xlsx") -> int:
     today = date.today().isoformat()
+    ontem = (date.today() - timedelta(days=1)).isoformat()
+    ha_5_dias = (date.today() - timedelta(days=5)).isoformat()
+    futuro = (date.today() + timedelta(days=10)).isoformat()
+    passado = (date.today() - timedelta(days=1)).isoformat()
+
     samples = [
-        RawJob("Teste", "Analista de Segurança da Informação Sênior (SOC) – Vaga afirmativa "
+        # 1) com emojis no título e na descrição
+        RawJob("Teste", "🚀 Analista de Segurança da Informação Sênior (SOC) – Vaga afirmativa "
                "para Pessoas Pretas e Pardas", "https://exemplo.com/vaga/1",
-               "<p>Atuação em <b>SIEM</b> e resposta a incidentes. Vaga afirmativa para "
+               "<p>✅ Atuação em <b>SIEM</b> e resposta a incidentes. 🔐 Vaga afirmativa para "
                "pessoas pretas e pardas. Modelo híbrido, 40 horas semanais. "
-               "Salário: R$ 9.000 a R$ 12.000.</p>", "Banco Exemplo", "São Paulo - SP",
+               "Salário: R$ 9.000 a R$ 12.000. 💰</p>", "Banco Exemplo 🏦", "São Paulo - SP 📍",
                today, None, "vacancy_type_effective", "hybrid"),
         RawJob("Teste", "Estagiário de Dados", "https://exemplo.com/vaga/2",
                "<ul><li>SQL</li><li>Power BI</li></ul> Bolsa R$ 2.200 por mês. 6 horas diárias.",
-               "Varejo SA", "Campinas - SP", today, None, "vacancy_type_internship", "on-site"),
+               "Varejo SA", "Campinas - SP", ontem, futuro, "vacancy_type_internship", "on-site"),
         RawJob("Teste", "[Remoto] Desenvolvedor Backend Python Pleno", "https://exemplo.com/vaga/3",
                "Contratação PJ. Python, Django, AWS. 100% remoto.", "Startup X", "",
-               "2025-01-10", "2025-02-01", None, None, "PJ Remoto"),
+               today, futuro, None, None, "PJ Remoto"),
         RawJob("Teste", "Gerente de Engenharia de Software", "https://exemplo.com/vaga/4",
                "Liderar times de desenvolvimento backend e frontend. Buscamos pessoas com "
                "deficiência (PCD) - vagas inclusivas. Presencial.", "Fintech Y",
                "Rio de Janeiro - RJ", today, None, "vacancy_type_effective"),
         RawJob("Teste", "Assistente Administrativo", "https://exemplo.com/vaga/5",
-               "Rotinas de escritório e atendimento.", "Empresa Z", "Curitiba - PR"),
+               "Rotinas de escritório e atendimento.", "Empresa Z", "Curitiba - PR", today),
         RawJob("Teste", "Engenheiro de IA / Machine Learning " + "Especialista " * 6,
                "https://exemplo.com/vaga/6", "LLM, PyTorch, MLOps. " * 200,
                "Lab AI", "Remoto", today, None, None, "remote"),
     ]
+    # Devem ser DESCARTADAS pelo filtro de frescor
+    must_discard = [
+        RawJob("Teste", "Desenvolvedor Java Sênior (antiga)", "https://exemplo.com/vaga/7",
+               "Java, Spring, APIs.", "Empresa Velha", "São Paulo - SP", ha_5_dias),
+        RawJob("Teste", "Desenvolvedor Python (vencida)", "https://exemplo.com/vaga/8",
+               "Python, Django, APIs.", "Empresa Vencida", "São Paulo - SP", today, passado),
+        RawJob("Teste", "Desenvolvedor Node (sem data)", "https://exemplo.com/vaga/9",
+               "Node, TypeScript, APIs.", "Empresa Sem Data", "São Paulo - SP"),
+    ]
+
     rows = []
     for s in samples:
         row = process_job(s)
@@ -1290,7 +1395,13 @@ def run_selftest(out_path: str = "vagas_fiap_selftest.xlsx") -> int:
               f"título={len(row['Título da Oportunidade'])} desc={len(row['Descrição da Oportunidade'])}"
               f" | problemas={issues or 'nenhum'}")
         assert not issues, issues
+        assert not any(_EMOJI.search(str(v)) for v in row.values()), "emoji no resultado"
         rows.append(row)
+
+    for s in must_discard:
+        assert process_job(s) is None, f"deveria ter sido descartada: {s.title}"
+        print(f"- descartada ({freshness_issue(s)}): {s.title}")
+
     export_to_excel(rows, out_path)
     print(f"\nExcel de teste gerado: {out_path} ({len(rows)} linhas)")
     return 0
